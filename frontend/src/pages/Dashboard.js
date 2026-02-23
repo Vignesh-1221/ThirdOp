@@ -30,9 +30,10 @@ import { Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import LocalHospitalIcon from '@mui/icons-material/LocalHospital';
 import AssessmentIcon from '@mui/icons-material/Assessment';
-import PsychologyIcon from '@mui/icons-material/Psychology';
+import VisibilityIcon from '@mui/icons-material/Visibility';
 import { styled, keyframes } from '@mui/system';
 import ReportsModal from '../components/ReportsModal';
+import AnyReportAnalysisModal from '../components/AnyReportAnalysisModal';
 
 // Register ChartJS components
 ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
@@ -86,6 +87,7 @@ const Dashboard = () => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const [isReportsModalOpen, setIsReportsModalOpen] = useState(false);
+  const [isAnyReportModalOpen, setIsAnyReportModalOpen] = useState(false);
   const navigate = useNavigate();
   
   useEffect(() => {
@@ -212,6 +214,26 @@ const Dashboard = () => {
       }));
     } catch (err) {
       console.error('Failed to delete report', err);
+    }
+  };
+
+  const handleViewAnalysis = async (reportId, e) => {
+    if (e) e.preventDefault();
+    if (e) e.stopPropagation();
+    try {
+      const { data } = await axios.get(`/api/reports/${reportId}/view`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      if (data && data.redirectTo) {
+        navigate(data.redirectTo);
+      }
+    } catch (err) {
+      if (err.response?.status === 404) {
+        setError('Report not found.');
+      } else {
+        console.error('View analysis failed', err);
+        setError('Failed to open analysis.');
+      }
     }
   };
   
@@ -455,25 +477,18 @@ const Dashboard = () => {
                   View Appointments
                 </Button>
                 <Button
-                  variant="contained"
-                  color="secondary"
-                  startIcon={<PsychologyIcon />}
-                  onClick={() => {
-                    if (reports.length > 0) {
-                      window.location.href = `/reports/${reports[0]._id}`;
-                    } else {
-                      alert('Please upload a report first to use Third Opinion');
-                    }
-                  }}
+                  variant="outlined"
+                  color="primary"
+                  startIcon={<AssessmentIcon />}
+                  onClick={() => setIsAnyReportModalOpen(true)}
                   sx={{
                     width: '100%',
                     py: 1.5,
                     fontWeight: 'bold',
-                    boxShadow: theme.shadows[2],
-                    background: `linear-gradient(45deg, ${theme.palette.secondary.main} 30%, ${theme.palette.secondary.dark} 90%)`
+                    boxShadow: theme.shadows[1]
                   }}
                 >
-                  Third Opinion
+                  Any Report Analysis
                 </Button>
               </Box>
             </Paper>
@@ -596,8 +611,8 @@ const Dashboard = () => {
                     <React.Fragment key={report._id}>
                       <Fade in={true} timeout={800 + (index * 200)}>
                         <ListItem 
-                          component={RouterLink}
-                          to={`/reports/${report._id}`}
+                          component="div"
+                          onClick={(e) => handleViewAnalysis(report._id, e)}
                           sx={{
                             borderRadius: 2,
                             mb: 1,
@@ -612,7 +627,7 @@ const Dashboard = () => {
                           <ListItemText 
                             primary={
                               <Typography variant="subtitle1" fontWeight="medium">
-                                {`${report.reportType.charAt(0).toUpperCase() + report.reportType.slice(1)} Report`}
+                                {`${report.reportType?.charAt(0).toUpperCase() + (report.reportType || '').slice(1)} Report`}
                               </Typography>
                             } 
                             secondary={
@@ -637,15 +652,12 @@ const Dashboard = () => {
                             <Button
                               size="small"
                               variant="outlined"
-                              color="secondary"
-                              startIcon={<PsychologyIcon />}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                navigate(`/thirdop/${report._id}`);
-                              }}
+                              color="primary"
+                              startIcon={<VisibilityIcon />}
+                              onClick={(e) => handleViewAnalysis(report._id, e)}
                               sx={{ ml: 1 }}
                             >
-                              ThirdOp
+                              View Analysis
                             </Button>
                           </Box>
                         </ListItem>
@@ -955,6 +967,12 @@ const Dashboard = () => {
         onClose={handleCloseReportsModal}
         reports={reports}
         onDelete={handleDeleteReport}
+        onViewAnalysis={handleViewAnalysis}
+      />
+      <AnyReportAnalysisModal
+        open={isAnyReportModalOpen}
+        onClose={() => setIsAnyReportModalOpen(false)}
+        token={token}
       />
     </Container>
   );

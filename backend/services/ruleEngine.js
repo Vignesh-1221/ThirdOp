@@ -1,7 +1,7 @@
 /**
  * Rule-based fallback for differential diagnosis.
  * Returns the same shape as LLM: { status, message, rankedDifferentials }.
- * Used when Gemini fails (429, timeout, network).
+ * Used for differential when no cloud LLM is configured.
  */
 const { analyzeThirdOpCase } = require('./thirdopEngine');
 

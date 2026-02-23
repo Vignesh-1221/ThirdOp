@@ -18,6 +18,7 @@ import UploadReport from './pages/UploadReport';
 import ReportDetail from './pages/ReportDetail';
 import Profile from './pages/Profile';
 import ThirdOp from './pages/ThirdOp';
+import AnyReportAnalysisResult from './pages/AnyReportAnalysisResult';
 import NotFound from './pages/NotFound';
 
 // Create theme
@@ -95,6 +96,14 @@ function App() {
               element={
                 <PrivateRoute>
                   <ThirdOp />
+                </PrivateRoute>
+              } 
+            />
+            <Route 
+              path="/any-report-analysis/:reportId" 
+              element={
+                <PrivateRoute>
+                  <AnyReportAnalysisResult />
                 </PrivateRoute>
               } 
             />

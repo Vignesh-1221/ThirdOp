@@ -1,15 +1,11 @@
+// Load environment variables first so they are available to all subsequent requires
+require('dotenv').config();
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
-const dotenv = require('dotenv');
 const mlRoutes = require('./routes/mlRoutes');
-
-// Load environment variables
-dotenv.config();
-
-// Verify Gemini API key configuration
-console.log("Gemini Key Loaded:", !!process.env.GEMINI_API_KEY);
 
 // Initialize express app
 const app = express();
@@ -39,10 +35,13 @@ app.use('/api/ml', mlRoutes);
 app.use('/api/thirdop', thirdopRoutes);
 app.use('/api/test', testRoutes);
 
-// MongoDB Connection
-const MONGODB_URI = 'mongodb://localhost:27017/iga_nephropathy';
+// Health check routes (e.g. Ollama connectivity)
+const healthRoutes = require('./routes/health.routes');
+app.use('/api/health', healthRoutes);
 
-// Use the defined MONGODB_URI constant instead of process.env.MONGODB_URI
+// MongoDB Connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/iga_nephropathy';
+
 mongoose.connect(MONGODB_URI)
   .then(() => console.log('MongoDB connected successfully'))
   .catch(err => {
@@ -50,15 +49,20 @@ mongoose.connect(MONGODB_URI)
     process.exit(1);
   });
 
-// Set JWT_SECRET if not in environment
+// JWT_SECRET required in production; dev fallback for convenience
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('FATAL: JWT_SECRET is required in production.');
+  process.exit(1);
+}
 if (!process.env.JWT_SECRET) {
   process.env.JWT_SECRET = 'your_jwt_secret_key';
 }
 
 // Server
 const PORT = 5009;
-const NODE_ENV = 'development';
 
 app.listen(PORT, () => {
-  console.log(`Server running in ${NODE_ENV} mode on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
+  console.log('MedGemma backend: Ollama (gemma:7b)');
+  console.log('Generic engine (Any Report): Ollama');
 });

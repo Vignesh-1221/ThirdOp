@@ -12,8 +12,6 @@ const ReportDetail = () => {
   const [report, setReport] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [prediction, setPrediction] = useState(null);
-  const [predicting, setPredicting] = useState(false);
 
   const safeParseReportData = (data) => {
     if (!data) return {};
@@ -45,7 +43,8 @@ const ReportDetail = () => {
     fetchReport();
   }, [id, token]);
 
-  const parsedReportData = safeParseReportData(report?.reportData);
+  const rawData = report?.normalizedReportData ?? report?.reportData;
+  const parsedReportData = safeParseReportData(rawData);
 
   const handleViewReport = () => {
     if (report?.fileUrl) {
@@ -53,22 +52,14 @@ const ReportDetail = () => {
     }
   };
 
-  const runMLPrediction = async () => {
-    setPredicting(true);
+  const handleViewAnalysis = async () => {
     try {
-      // Send report data to the ML model endpoint
-      const response = await axios.post('/api/ml/predict', {
-        reportId: id,
-        reportData: report.data // Assuming your report has a data field with relevant information
-      }, {
+      const { data } = await axios.get(`/api/reports/${id}/view`, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      
-      setPrediction(response.data);
+      if (data?.redirectTo) navigate(data.redirectTo);
     } catch (err) {
-      setError('Failed to get prediction from ML model');
-    } finally {
-      setPredicting(false);
+      setError(err.response?.status === 404 ? 'Report not found.' : 'Failed to open analysis.');
     }
   };
 
@@ -124,70 +115,21 @@ const ReportDetail = () => {
         </Box>
         
         <Divider sx={{ my: 3 }} />
-        
-        {/* ML Model Integration */}
-        <Box sx={{ my: 2 }}>
-          <Typography variant="h5" gutterBottom>AI Analysis</Typography>
-          
-          {!prediction && (
-            <Button 
-              variant="contained" 
-              color="primary" 
-              onClick={runMLPrediction}
-              disabled={predicting}
-              sx={{ mt: 1 }}
-            >
-              {predicting ? 'Analyzing...' : 'Analyze Report with AI'}
-            </Button>
-          )}
-          
-          {predicting && (
-            <Box sx={{ display: 'flex', alignItems: 'center', mt: 2 }}>
-              <CircularProgress size={24} sx={{ mr: 2 }} />
-              <Typography>Processing your report with our AI model...</Typography>
-            </Box>
-          )}
-          
-          {prediction && (
-            <Box sx={{ mt: 2, p: 2, bgcolor: 'background.paper', borderRadius: 1 }}>
-              <Typography variant="h6" gutterBottom>Analysis Results</Typography>
-              
-              <Typography variant="body1" gutterBottom>
-                <strong>Prediction:</strong> {prediction.result}
-              </Typography>
-              
-              {prediction.confidence && (
-                <Typography variant="body1" gutterBottom>
-                  <strong>Confidence:</strong> {(prediction.confidence * 100).toFixed(2)}%
-                </Typography>
-              )}
-              
-              {prediction.details && (
-                <Box sx={{ mt: 2 }}>
-                  <Typography variant="subtitle1" gutterBottom>Additional Details:</Typography>
-                  <Typography variant="body2">{prediction.details}</Typography>
-                </Box>
-              )}
-            </Box>
-          )}
-        </Box>
 
-        <Divider sx={{ my: 3 }} />
-
-        {/* Third Opinion Section */}
+        {/* View Analysis: routes to ThirdOp (kidney) or Any Report (generic) by analysisType */}
         <Box sx={{ my: 3, p: 3, bgcolor: 'primary.light', borderRadius: 2 }}>
           <Typography variant="h5" gutterBottom sx={{ color: 'white', fontWeight: 'bold' }}>
-            Third Opinion Decision Support
+            View Analysis
           </Typography>
           <Typography variant="body2" sx={{ mb: 3, color: 'white' }}>
-            Get advanced decision support analysis combining clinical values and ML predictions
+            Open the cached analysis for this report (Kidney or Any Report based on type).
           </Typography>
           <Button
             variant="contained"
             color="secondary"
             size="large"
             startIcon={<PsychologyIcon />}
-            onClick={() => navigate(`/thirdop/${id}`)}
+            onClick={handleViewAnalysis}
             sx={{ 
               mt: 1,
               fontWeight: 'bold',
@@ -196,7 +138,7 @@ const ReportDetail = () => {
               px: 3
             }}
           >
-            Run ThirdOp Analysis
+            View Analysis
           </Button>
         </Box>
       </Paper>

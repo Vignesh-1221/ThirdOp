@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Box, Typography, Collapse, IconButton, Checkbox } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
-import { getMaxQuestionsPerConcern } from './DoctorQuestionsSection';
 
 /**
  * Clinical Concerns Identified: each concern has checkbox, title, chevron.
@@ -17,7 +16,6 @@ export default function ClinicalConcernsSection({
   onCheckedChange
 }) {
   const concerns = Array.isArray(rankedConcerns) ? rankedConcerns.filter((c) => c && (c.title || c.reasoning)) : [];
-  const maxQ = getMaxQuestionsPerConcern(riskTier, hasCriticalFlags);
 
   if (concerns.length === 0) return null;
 
@@ -33,7 +31,6 @@ export default function ClinicalConcernsSection({
           key={index}
           index={index}
           concern={concern}
-          maxQuestions={Math.min(maxQ, 3)}
           checked={!!checkedConcerns[index]}
           onToggle={handleToggle(index)}
         />
@@ -42,13 +39,12 @@ export default function ClinicalConcernsSection({
   );
 }
 
-function ConcernItem({ index, concern, maxQuestions, checked, onToggle }) {
+function ConcernItem({ index, concern, checked, onToggle }) {
   const [expanded, setExpanded] = useState(false);
   const title = concern.title || 'Clinical concern';
   const reasoning = concern.reasoning || '';
   const questions = (Array.isArray(concern.doctorQuestions) ? concern.doctorQuestions : [])
-    .filter((q) => typeof q === 'string' && q.trim())
-    .slice(0, maxQuestions);
+    .filter((q) => typeof q === 'string' && q.trim());
 
   return (
     <Box

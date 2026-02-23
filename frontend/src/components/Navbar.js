@@ -190,7 +190,7 @@ const Navbar = () => {
               backgroundSize: '200% 200%', // Smooth gradient transition
             }}
           >
-            Nephrofind
+            ThirdOp
           </Typography>
 
           {/* Desktop navigation */}

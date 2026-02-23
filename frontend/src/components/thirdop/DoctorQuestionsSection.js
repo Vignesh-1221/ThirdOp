@@ -22,13 +22,11 @@ export default function DoctorQuestionsSection({
   hasCriticalFlags
 }) {
   const concerns = Array.isArray(rankedConcerns) ? rankedConcerns.filter((c) => c && (c.title || c.reasoning)) : [];
-  const maxQ = getMaxQuestionsPerConcern(riskTier, hasCriticalFlags);
   const withQuestions = concerns
     .map((c) => ({
       ...c,
       questions: (Array.isArray(c.doctorQuestions) ? c.doctorQuestions : [])
         .filter((q) => typeof q === 'string' && q.trim())
-        .slice(0, maxQ)
     }))
     .filter((c) => c.questions.length > 0);
 

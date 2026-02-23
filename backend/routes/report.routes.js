@@ -4,24 +4,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const Report = require('../models/report.model');
-const jwt = require('jsonwebtoken');
-
-// Middleware to verify JWT token
-const verifyToken = (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1];
-  
-  if (!token) {
-    return res.status(401).json({ message: 'No token provided' });
-  }
-  
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.id;
-    next();
-  } catch (error) {
-    return res.status(401).json({ message: 'Invalid token' });
-  }
-};
+const auth = require('../middleware/auth');
+const { normalizeReportData, canonicalToDisplay } = require('../lib/keyNormalizer');
+const { validateReportData } = require('../lib/sanityValidation');
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
@@ -52,7 +37,7 @@ const upload = multer({
 });
 
 // Upload a new report
-router.post('/upload', verifyToken, upload.single('reportFile'), async (req, res) => {
+router.post('/upload', auth, upload.single('reportFile'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ message: 'No file uploaded' });
@@ -61,10 +46,11 @@ router.post('/upload', verifyToken, upload.single('reportFile'), async (req, res
     const { reportType } = req.body;
     
     const report = new Report({
-      user: req.userId,
+      user: req.user.id,
       reportType,
       reportFile: req.file.path,
-      reportData: req.body.reportData || {}
+      reportData: req.body.reportData || {},
+      analysisType: 'kidney'
     });
     
     await report.save();
@@ -85,11 +71,11 @@ router.post('/upload', verifyToken, upload.single('reportFile'), async (req, res
 });
 
 // Create a new report (manual entry)
-router.post('/', verifyToken, async (req, res) => {
+router.post('/', auth, async (req, res) => {
   try {
     // Log incoming request body for debugging
     console.log('POST /api/reports - Request body:', JSON.stringify(req.body, null, 2));
-    console.log('POST /api/reports - User ID:', req.userId);
+    console.log('POST /api/reports - User ID:', req.user?.id);
     
     const { reportType, source, reportData, predictionResult } = req.body;
     
@@ -135,11 +121,12 @@ router.post('/', verifyToken, async (req, res) => {
     
     // Build report object (reportFile is omitted for manual entries)
     const reportDataToSave = {
-      user: req.userId,
+      user: req.user.id,
       reportType,
       source: finalSource,
       reportData: reportData,
-      predictionResult: predictionResult || null
+      predictionResult: predictionResult || null,
+      analysisType: 'kidney'
     };
     
     console.log('Creating report with data:', JSON.stringify(reportDataToSave, null, 2));
@@ -203,19 +190,20 @@ router.post('/', verifyToken, async (req, res) => {
       });
     }
     
-    // Generic server error
-    res.status(500).json({ 
-      message: 'Server error', 
-      error: error.message,
-      ...(process.env.NODE_ENV === 'development' && { stack: error.stack })
+    // Generic server error — do not expose stack or internal message in production
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({
+      error: 'SERVER_ERROR',
+      message: isProd ? 'Server error. Please try again.' : error.message,
+      ...(isProd ? {} : { stack: error.stack })
     });
   }
 });
 
 // Get all reports for a user
-router.get('/', verifyToken, async (req, res) => {
+router.get('/', auth, async (req, res) => {
   try {
-    const reports = await Report.find({ user: req.userId }).sort({ uploadDate: -1 });
+    const reports = await Report.find({ user: req.user.id }).sort({ uploadDate: -1 });
 
     const normalizedReports = reports.map(report => {
       const reportObj = report.toObject();
@@ -232,8 +220,29 @@ router.get('/', verifyToken, async (req, res) => {
   }
 });
 
-// Get a specific report
-router.get('/:id', verifyToken, async (req, res) => {
+// Get view redirect for a report (by analysisType). Does not run analysis.
+router.get('/:id/view', auth, async (req, res) => {
+  try {
+    const report = await Report.findById(req.params.id);
+    if (!report) {
+      return res.status(404).json({ message: 'Report not found' });
+    }
+    if (report.user.toString() !== req.user.id) {
+      return res.status(403).json({ message: 'Unauthorized access to this report' });
+    }
+    const id = req.params.id;
+    const analysisType = report.analysisType || (report.genericAnalysisResult ? 'generic' : 'kidney');
+    if (analysisType === 'generic') {
+      return res.status(200).json({ redirectTo: `/any-report-analysis/${id}` });
+    }
+    return res.status(200).json({ redirectTo: `/thirdop/${id}` });
+  } catch (error) {
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get a specific report (with normalized reportData for consistent display keys)
+router.get('/:id', auth, async (req, res) => {
   try {
     const report = await Report.findById(req.params.id);
     
@@ -241,17 +250,20 @@ router.get('/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Report not found' });
     }
     
-    // Check if the report belongs to the authenticated user
-    if (report.user.toString() !== req.userId) {
+    if (report.user.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized access to this report' });
     }
     
     const reportObj = report.toObject();
-    // Only add fileUrl if there's an actual file (not manual entries)
     if (report.reportFile && report.source !== 'manual') {
       reportObj.fileUrl = `/uploads/${path.basename(report.reportFile)}`;
     }
-    
+
+    // Attach normalized reportData for consistent display keys (fixes key mismatch); keep original reportData
+    const raw = reportObj.reportData || {};
+    const { canonical } = normalizeReportData(raw);
+    const { validated } = validateReportData(canonical);
+    reportObj.normalizedReportData = canonicalToDisplay(validated);
     res.status(200).json({ report: reportObj });
   } catch (error) {
     res.status(500).json({ message: 'Server error', error: error.message });
@@ -259,7 +271,7 @@ router.get('/:id', verifyToken, async (req, res) => {
 });
 
 // Delete a specific report
-router.delete('/:id', verifyToken, async (req, res) => {
+router.delete('/:id', auth, async (req, res) => {
   try {
     const report = await Report.findById(req.params.id);
 
@@ -267,7 +279,7 @@ router.delete('/:id', verifyToken, async (req, res) => {
       return res.status(404).json({ message: 'Report not found' });
     }
 
-    if (report.user.toString() !== req.userId) {
+    if (report.user.toString() !== req.user.id) {
       return res.status(403).json({ message: 'Unauthorized access to this report' });
     }
 

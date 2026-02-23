@@ -9,7 +9,7 @@ const reportSchema = new mongoose.Schema({
   reportType: {
     type: String,
     required: true,
-    enum: ['blood', 'urine', 'kidney_biopsy', 'other', 'Manual Entry']
+    enum: ['blood', 'urine', 'kidney_biopsy', 'other', 'Manual Entry', 'Generic Lab']
   },
   reportFile: {
     type: String,
@@ -17,7 +17,7 @@ const reportSchema = new mongoose.Schema({
   },
   source: {
     type: String,
-    enum: ['upload', 'manual'],
+    enum: ['upload', 'manual', 'upload_generic'],
     default: 'upload'
   },
   reportData: {
@@ -25,6 +25,21 @@ const reportSchema = new mongoose.Schema({
     default: {}
   },
   predictionResult: {
+    type: Object,
+    default: null
+  },
+  /** "kidney" = ThirdOp analysis; "generic" = Any Report Analysis. Inferred from genericAnalysisResult if missing (backward compat). */
+  analysisType: {
+    type: String,
+    enum: ['kidney', 'generic']
+  },
+  /** LLM result for generic lab analysis (rankedConcerns etc.). Only used when analysisType === 'generic'. */
+  genericAnalysisResult: {
+    type: Object,
+    default: undefined
+  },
+  /** Cached ThirdOp decision support result (re-analysis). Updated when POST /api/thirdop/analyze runs for this report. */
+  thirdopAnalysis: {
     type: Object,
     default: null
   },

@@ -242,10 +242,13 @@ function assessClinicalRisk(reportData) {
  * NOTE: mlRisk is coarse-grained ('low' | 'medium' | 'high') for agreement checks
  */
 function assessMLSignal(mlPrediction) {
+  if (!mlPrediction || typeof mlPrediction !== 'object') {
+    return { mlSignal: 'weak', mlRisk: 'low', probability: 0.5 };
+  }
   const prediction = mlPrediction.prediction;
-  const probabilities = mlPrediction.probabilities;
-  const positiveProbability = probabilities[1];
-  const negativeProbability = probabilities[0];
+  const probabilities = Array.isArray(mlPrediction.probabilities) ? mlPrediction.probabilities : [0.5, 0.5];
+  const positiveProbability = probabilities[1] != null ? probabilities[1] : 0.5;
+  const negativeProbability = probabilities[0] != null ? probabilities[0] : 0.5;
 
   let mlSignal = 'weak';
   let mlRisk = 'low';
@@ -415,7 +418,8 @@ function determineHumanEscalation(riskTier, decision, reportData, mlPrediction, 
   }
 
   // Rule 4: ML prediction probability > 0.9 for positive diagnosis
-  if (mlPrediction.prediction === 1 && mlPrediction.probabilities[1] > 0.9) {
+  const probs = mlPrediction.probabilities;
+  if (mlPrediction.prediction === 1 && Array.isArray(probs) && probs[1] != null && probs[1] > 0.9) {
     return true;
   }
 

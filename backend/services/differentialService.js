@@ -1,21 +1,40 @@
 /**
- * Differential service: cache-first, LLM primary, rule-engine fallback.
- * Flow: 1) Check cache by reportId → 2) If miss, call LLM → 3) On LLM failure, use ruleEngine.
- * Clinical reasoning (llmInsights) is cached in the same document; no repeated Gemini calls.
- * Never throws on Gemini failure; always returns a result.
+ * Differential service: cache-first for differential (rule-based); clinical reasoning from MedGemma (Ollama).
+ * Flow: 1) Rule-based decision 2) Cached differential or rule-based differential 3) Explanation/concerns from MedGemma (Ollama).
  */
 const Differential = require('../models/differential.model');
 const { analyzeThirdOpCase } = require('./thirdopEngine');
-const { generateClinicalReasoning } = require('./geminiService');
-const { generateDifferential } = require('./llmService');
+const { generateDifferential, generateMedGemmaReasoning } = require('./llmService');
 const { generateFallbackDifferential } = require('./ruleEngine');
 
 const LLM_INSIGHTS_FALLBACK = {
   rankedConcerns: [],
-  overallInterpretation: 'LLM analysis unavailable. Clinical analysis completed using rule-based system.',
+  overallInterpretation: 'Clinical reasoning unavailable. Rule-based analysis completed.',
   concerns: [],
-  summary: 'LLM analysis unavailable. Clinical analysis completed using rule-based system.'
+  summary: 'Clinical reasoning unavailable. Rule-based analysis completed.'
 };
+
+/**
+ * Build API llmInsights shape from MedGemma output (concerns with title, reason, doctorQuestions).
+ * Frontend expects rankedConcerns with title, reasoning, and doctorQuestions (bullet list under each accordion).
+ * @param {Array<{ title: string, reason: string, doctorQuestions?: string[] }>} concerns - From generateMedGemmaReasoning
+ * @returns {Object} - { rankedConcerns, overallInterpretation, concerns, summary }
+ */
+function llmInsightsFromMedGemma(concerns) {
+  const list = Array.isArray(concerns) ? concerns : [];
+  const rankedConcerns = list.map((c) => ({
+    title: typeof c.title === 'string' ? c.title : '',
+    reasoning: typeof c.reason === 'string' ? c.reason : '',
+    doctorQuestions: Array.isArray(c.doctorQuestions) ? c.doctorQuestions.filter((q) => typeof q === 'string' && q.trim()) : []
+  }));
+  const firstReason = rankedConcerns[0]?.reasoning ?? '';
+  return {
+    rankedConcerns,
+    overallInterpretation: firstReason,
+    concerns: rankedConcerns.map((c) => c.title).filter(Boolean),
+    summary: firstReason
+  };
+}
 
 /**
  * Map stored llmInsights (DB shape) to API shape expected by frontend.
@@ -59,7 +78,7 @@ function mapApiLlmInsightsToStored(api) {
 
 /**
  * Get cached differential by reportId. Returns null if not found.
- * When present, includes llmInsights (stored shape) so caller can reuse without calling Gemini.
+ * When present, includes llmInsights (stored shape) so caller can reuse without calling the reasoning service again.
  */
 async function getCachedDifferential(reportId) {
   const doc = await Differential.findOne({ reportId }).lean();
@@ -114,10 +133,10 @@ async function saveLlmInsights(reportId, llmInsightsApi) {
 }
 
 /**
- * Full ThirdOp analysis: decision + clinical concerns (LLM) + differential (cache → LLM → fallback).
- * Clinical reasoning (llmInsights) is cached per reportId; Gemini is only called when missing.
+ * Full ThirdOp analysis: rule-based decision + differential (cache → LLM → fallback) + explanation from MedGemma only.
+ * This path does NOT use any cloud LLM for explanation/clinical reasoning; only MedGemma (Ollama). Risk and escalation stay rule-based.
  * @param {string} reportId
- * @param {Object} reportData - Normalized report data (keys like 'CREATININE (mg/dL)', etc.)
+ * @param {Object} reportData - Normalized report data (display keys e.g. 'CREATININE (mg/dL)')
  * @param {Object} mlPrediction
  * @param {Object} [reportMetadata]
  * @returns {Promise<Object>} Full response payload for POST /api/thirdop/analyze
@@ -134,7 +153,6 @@ async function generateDifferentialAnalysis(reportId, reportData, mlPrediction, 
   const cached = await getCachedDifferential(reportId);
 
   let differentialResult = null;
-  let llmInsights = null;
 
   if (cached) {
     differentialResult = {
@@ -143,35 +161,35 @@ async function generateDifferentialAnalysis(reportId, reportData, mlPrediction, 
       rankedDifferentials: cached.rankedDifferentials || [],
       source: cached.source
     };
-    if (cached.llmInsights) {
-      llmInsights = mapStoredLlmInsightsToApi(cached.llmInsights);
-    } else {
-      try {
-        llmInsights = await generateClinicalReasoning(decision, input);
-      } catch (e) {
-        console.error('[ThirdOp] Gemini clinical reasoning error:', e.message);
-        llmInsights = LLM_INSIGHTS_FALLBACK;
-      }
-      if (!llmInsights) llmInsights = LLM_INSIGHTS_FALLBACK;
-      await saveLlmInsights(reportId, llmInsights);
-    }
   } else {
     try {
-      llmInsights = await generateClinicalReasoning(decision, input);
-    } catch (e) {
-      console.error('[ThirdOp] Gemini clinical reasoning error:', e.message);
-      llmInsights = LLM_INSIGHTS_FALLBACK;
-    }
-    if (!llmInsights) llmInsights = LLM_INSIGHTS_FALLBACK;
-
-    try {
       differentialResult = await generateDifferential(decision, input);
-      await saveDifferential(reportId, differentialResult, 'llm', llmInsights);
+      await saveDifferential(reportId, differentialResult, 'llm', null);
     } catch (err) {
       console.error('[ThirdOp] LLM differential failed, using rule fallback:', err.message);
       differentialResult = generateFallbackDifferential(input);
-      await saveDifferential(reportId, differentialResult, 'rules_fallback', llmInsights);
+      await saveDifferential(reportId, differentialResult, 'rules_fallback', null);
     }
+  }
+
+  // Explanation and clinical reasoning: always from MedGemma (Ollama).
+  let llmInsights = LLM_INSIGHTS_FALLBACK;
+  let concerns = [];
+  let explanationSource = 'rules';
+
+  console.log('[ANALYZE] Using Ollama MedGemma');
+  try {
+    const riskLevel =
+      decision.riskTier === 'high' ? 'HIGH' : decision.riskTier === 'medium' ? 'MODERATE' : 'LOW';
+    const medgemmaPayload = { ...reportData, riskLevel };
+    const medgemma = await generateMedGemmaReasoning(medgemmaPayload);
+    concerns = Array.isArray(medgemma.concerns) ? medgemma.concerns : [];
+    llmInsights = llmInsightsFromMedGemma(concerns);
+    explanationSource = 'ollama';
+    // Persist llmInsights for cache consistency (optional; next run still calls MedGemma for fresh result)
+    await saveLlmInsights(reportId, llmInsights);
+  } catch (e) {
+    console.error('[ThirdOp] MedGemma clinical reasoning error:', e.message);
   }
 
   return {
@@ -187,8 +205,9 @@ async function generateDifferentialAnalysis(reportId, reportData, mlPrediction, 
     message: differentialResult.message,
     differentialSource: differentialResult.source,
     llmInsights,
+    concerns,
     explanation: '',
-    explanationSource: 'rules',
+    explanationSource,
     recommendedActions: [],
     timestamp: new Date().toISOString()
   };

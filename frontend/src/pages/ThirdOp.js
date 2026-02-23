@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   Container,
   Typography,
   Box,
   CircularProgress,
-  Alert
+  Alert,
+  Button
 } from '@mui/material';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
@@ -36,6 +37,8 @@ const ThirdOp = () => {
   const [analyzing, setAnalyzing] = useState(false);
   const [error, setError] = useState(null);
   const [checkedConcerns, setCheckedConcerns] = useState({});
+  const [usedCachedAnalysis, setUsedCachedAnalysis] = useState(false);
+  const hasTriggeredAnalysis = useRef(false);
 
   const safeParseReportData = (data) => {
     if (!data) return {};
@@ -57,6 +60,9 @@ const ThirdOp = () => {
 
   const getNormalizedReportData = () => {
     if (!report) return {};
+    if (report.normalizedReportData && typeof report.normalizedReportData === 'object') {
+      return report.normalizedReportData;
+    }
     const parsed = safeParseReportData(report.reportData);
     return {
       'CREATININE (mg/dL)': toNumber(
@@ -78,7 +84,17 @@ const ThirdOp = () => {
         const response = await axios.get(`/api/reports/${id}`, {
           headers: { Authorization: `Bearer ${token}` }
         });
-        setReport(response.data.report);
+        const reportData = response.data.report;
+        setReport(reportData);
+        // Use cached ThirdOp analysis when available so re-opening the page does not re-run analysis
+        const cached = reportData?.thirdopAnalysis;
+        if (cached && typeof cached === 'object' && (cached.riskTier != null || cached.status === 'no_kidney_analysis')) {
+          setAnalysis({
+            ...cached,
+            rankedDifferentials: Array.isArray(cached.rankedDifferentials) ? cached.rankedDifferentials : []
+          });
+          setUsedCachedAnalysis(true);
+        }
         setLoading(false);
       } catch (err) {
         setError('Failed to load report details');
@@ -102,6 +118,11 @@ const ThirdOp = () => {
 
     try {
       const reportData = getNormalizedReportData();
+      if (Object.keys(reportData).length === 0) {
+        setError('No lab values available. Add report data or use a report with extracted values.');
+        setAnalyzing(false);
+        return;
+      }
 
       let mlPrediction = report.predictionResult;
       if (!mlPrediction || mlPrediction.status !== 'success') {
@@ -119,8 +140,9 @@ const ThirdOp = () => {
         }
       }
 
+      const baseUrl = process.env.REACT_APP_API_URL || '';
       const response = await axios.post(
-        'http://localhost:5009/api/thirdop/analyze',
+        `${baseUrl}/api/thirdop/analyze`,
         {
           reportId: id,
           reportData,
@@ -134,22 +156,29 @@ const ThirdOp = () => {
       );
 
       const data = response.data || {};
+      console.log(response.data);
       setAnalysis({
         ...data,
         rankedDifferentials: Array.isArray(data.rankedDifferentials) ? data.rankedDifferentials : []
       });
+      setUsedCachedAnalysis(false);
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to run ThirdOp analysis. Please try again.');
+      setError(err.response?.data?.message || err.response?.data?.error || 'Failed to run ThirdOp analysis. Please try again.');
     } finally {
       setAnalyzing(false);
     }
   };
 
+  // Run analysis once when report is loaded and no valid cached analysis
   useEffect(() => {
-    if (report && !analysis && !analyzing && !error) {
-      runThirdOpAnalysis();
-    }
-  }, [report, analysis, analyzing, error]);
+    if (!report || analyzing || error || hasTriggeredAnalysis.current) return;
+    const hasCached = report.thirdopAnalysis && typeof report.thirdopAnalysis === 'object' &&
+      (report.thirdopAnalysis.riskTier != null || report.thirdopAnalysis.status === 'no_kidney_analysis');
+    if (hasCached) return; // cache was applied in fetchReport
+    if (analysis) return; // already have result
+    hasTriggeredAnalysis.current = true;
+    runThirdOpAnalysis();
+  }, [report, analyzing, error, analysis]);
 
   if (loading) {
     return (
@@ -170,9 +199,10 @@ const ThirdOp = () => {
     );
   }
 
-  const normalizedReportData = getNormalizedReportData();
+  const normalizedReportData = analysis?.normalizedReportData || getNormalizedReportData();
   const hasCriticalFlags =
     analysis?.clinicalIndicators?.criticalFlags?.length > 0;
+  const hasKidneyAnalysis = analysis?.riskTier != null && analysis?.status !== 'no_kidney_analysis';
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
@@ -182,7 +212,28 @@ const ThirdOp = () => {
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Report ID: {id}
+          {usedCachedAnalysis && (
+            <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+              (showing cached analysis)
+            </Typography>
+          )}
         </Typography>
+
+        {analysis && !analyzing && (
+          <Button
+            variant="outlined"
+            size="small"
+            onClick={() => {
+              setAnalysis(null);
+              setError(null);
+              hasTriggeredAnalysis.current = false;
+              runThirdOpAnalysis();
+            }}
+            sx={{ mb: 2 }}
+          >
+            Re-run analysis
+          </Button>
+        )}
 
         {error && (
           <Alert severity="error" sx={{ mb: 3 }}>
@@ -197,14 +248,22 @@ const ThirdOp = () => {
           </Box>
         )}
 
+        {analysis && !analyzing && !hasKidneyAnalysis && (analysis?.message || analysis?.status === 'no_kidney_analysis') && (
+          <Alert severity="info" sx={{ mb: 3 }}>
+            {analysis.message || 'Kidney decision support was not run for this report (missing kidney markers or ML prediction).'}
+          </Alert>
+        )}
+
         {analysis && !analyzing && (
           <Box>
-            {/* SECTION 1 — Risk Snapshot */}
+            {/* SECTION 1 — Risk Snapshot (only when kidney analysis ran) */}
+            {hasKidneyAnalysis && (
             <RiskBanner
               riskTier={analysis.riskTier}
               decision={analysis.decision}
               humanEscalation={analysis.humanEscalation}
             />
+            )}
 
             {/* SECTION 2 — Key Clinical Metrics */}
             <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX, mt: 4 }}>
@@ -212,8 +271,8 @@ const ThirdOp = () => {
             </Typography>
             <MetricsGrid reportData={normalizedReportData} />
 
-            {/* SECTION 3 — Triggered Thresholds (subtle alert, only if present) */}
-            {hasCriticalFlags && (
+            {/* SECTION 3 — Triggered Thresholds (only when kidney analysis) */}
+            {hasKidneyAnalysis && hasCriticalFlags && (
               <>
                 <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
                   Triggered Thresholds
@@ -222,37 +281,84 @@ const ThirdOp = () => {
               </>
             )}
 
-            {/* SECTION 4 — Ranked Possible Diseases (Decision Support) */}
-            <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
-              Ranked Possible Diseases (Decision Support)
-            </Typography>
-            <RankedDiseasesSection
-              rankedDifferentials={analysis.rankedDifferentials}
-              clinicalIndicators={analysis.clinicalIndicators}
-              status={analysis.status}
-              message={analysis.message}
-            />
+            {/* SECTION 4 — Ranked Possible Diseases (only when kidney analysis) */}
+            {hasKidneyAnalysis && (
+              <>
+                <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
+                  Ranked Possible Diseases (Decision Support)
+                </Typography>
+                <RankedDiseasesSection
+                  rankedDifferentials={analysis.rankedDifferentials}
+                  clinicalIndicators={analysis.clinicalIndicators}
+                  status={analysis.status}
+                  message={analysis.message}
+                />
+              </>
+            )}
 
-            {/* SECTION 5 — Clinical Concerns Identified */}
-            <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
-              Clinical Concerns Identified
-            </Typography>
-            <ClinicalConcernsSection
-              rankedConcerns={analysis.llmInsights?.rankedConcerns}
-              riskTier={analysis.riskTier}
-              hasCriticalFlags={hasCriticalFlags}
-              checkedConcerns={checkedConcerns}
-              onCheckedChange={setCheckedConcerns}
-            />
+            {/* SECTION 5 — Clinical Concerns (only when kidney analysis) */}
+            {hasKidneyAnalysis && (
+              <>
+                <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
+                  Clinical Concerns Identified
+                </Typography>
+                <ClinicalConcernsSection
+                  rankedConcerns={analysis.llmInsights?.rankedConcerns}
+                  riskTier={analysis.riskTier}
+                  hasCriticalFlags={hasCriticalFlags}
+                  checkedConcerns={checkedConcerns}
+                  onCheckedChange={setCheckedConcerns}
+                />
+              </>
+            )}
 
-            {/* SECTION 6 — Recommended Next Steps */}
-            <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
-              Recommended Next Steps
-            </Typography>
-            <ActionSection
-              decision={analysis.decision}
-              humanEscalation={analysis.humanEscalation}
-            />
+            {/* SECTION 6 — Recommended Next Steps (only when kidney analysis) */}
+            {hasKidneyAnalysis && (
+              <>
+                <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
+                  Recommended Next Steps
+                </Typography>
+                <ActionSection
+                  decision={analysis.decision}
+                  humanEscalation={analysis.humanEscalation}
+                />
+              </>
+            )}
+
+            {/* SECTION 7 — Other module findings (hematology, diabetes, lipid, etc.) */}
+            {Array.isArray(analysis.moduleResults) && analysis.moduleResults.length > 0 && (
+              <>
+                <Typography variant="subtitle1" sx={{ ...SECTION_TITLE_SX }}>
+                  Other findings
+                </Typography>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+                  {analysis.moduleResults.map((mod, idx) => (
+                    <Box
+                      key={mod.module || idx}
+                      sx={{
+                        p: 1.5,
+                        borderRadius: 1,
+                        bgcolor: 'grey.50',
+                        border: '1px solid',
+                        borderColor: 'divider'
+                      }}
+                    >
+                      <Typography variant="subtitle2" fontWeight={600} sx={{ textTransform: 'capitalize', mb: 0.5 }}>
+                        {mod.module || 'Other'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        {mod.summary || 'No summary.'}
+                      </Typography>
+                      {Array.isArray(mod.findings) && mod.findings.length > 0 && (
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+                          {mod.findings.map((f) => f.message).join('; ')}
+                        </Typography>
+                      )}
+                    </Box>
+                  ))}
+                </Box>
+              </>
+            )}
 
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 5 }}>
               Analysis completed: {new Date(analysis.timestamp).toLocaleString()}

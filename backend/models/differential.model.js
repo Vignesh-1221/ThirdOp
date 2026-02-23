@@ -14,7 +14,7 @@ const rankedConcernItemSchema = new mongoose.Schema({
   doctorQuestions: { type: [String], default: [] }
 }, { _id: false, strict: false });
 
-/** Cached clinical reasoning from Gemini; avoids repeated LLM calls per reportId */
+/** Cached clinical reasoning from MedGemma (Ollama); avoids repeated LLM calls per reportId */
 const llmInsightsSchema = new mongoose.Schema({
   overallSummary: { type: String, default: '' },
   rankedConcerns: { type: [rankedConcernItemSchema], default: [] },

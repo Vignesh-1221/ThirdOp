@@ -1,26 +1,35 @@
 const express = require('express');
 const router = express.Router();
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const auth = require('../middleware/auth');
-const { generateDifferentialAnalysis } = require('../services/differentialService');
+const Report = require('../models/report.model');
+const { runThirdOpAnalysis } = require('../services/thirdopController');
+const { runGenericAnalysis } = require('../services/genericLabService');
+const { generateMedGemmaReasoning } = require('../services/llmService');
 
-/**
- * Normalize reportData to canonical keys (same as previous route).
- */
-function normalizeReportData(raw) {
-  return {
-    'CREATININE (mg/dL)': raw['CREATININE (mg/dL)'] ?? raw.CREATININE ?? raw.creatinine ?? null,
-    'UREA (mg/dL)': raw['UREA (mg/dL)'] ?? raw.UREA ?? raw.urea ?? null,
-    'ALBUMIN (g/dL)': raw['ALBUMIN (g/dL)'] ?? raw.ALBUMIN ?? raw.albumin ?? null,
-    'URIC ACID (mg/dL)': raw['URIC ACID (mg/dL)'] ?? raw.URIC_ACID ?? raw.uric_acid ?? null,
-    eGFR: raw.eGFR ?? raw.EGFR ?? null,
-    ACR: raw.ACR ?? raw.acr ?? null
-  };
-}
+const genericUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const dir = path.join(__dirname, '../uploads');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => cb(null, `generic-${Date.now()}-${(file.originalname || 'report').replace(/[^a-zA-Z0-9.-]/g, '_')}`)
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname((file.originalname || '').toLowerCase());
+    if (ext === '.pdf') return cb(null, true);
+    cb(new Error('Only PDF files are allowed for Any Report Analysis.'));
+  }
+});
 
 /**
  * POST /api/thirdop/analyze
- * Analyzes clinical data and ML prediction; returns decision support.
- * Flow: cache → LLM differential → on failure rule fallback. Never crashes on Gemini 429/failure.
+ * Analyzes clinical data; runs kidney decision support only when kidney markers + ML present.
+ * All reportData is normalized (canonical keys) and sanity-validated; no global mandatory creatinine/urea/albumin.
  */
 router.post('/analyze', auth, async (req, res) => {
   try {
@@ -33,68 +42,120 @@ router.post('/analyze', auth, async (req, res) => {
       });
     }
 
-    if (!reportData) {
+    if (reportData == null || typeof reportData !== 'object') {
       return res.status(400).json({
         error: 'Invalid input',
-        message: 'Missing required field: reportData'
+        message: 'Missing required field: reportData (object)'
       });
     }
 
-    if (!mlPrediction) {
-      return res.status(400).json({
-        error: 'Invalid input',
-        message: 'Missing required field: mlPrediction'
-      });
-    }
-
-    const normalizedReportData = normalizeReportData(reportData);
-
-    const hasCreatinine = normalizedReportData['CREATININE (mg/dL)'] != null;
-    const hasUrea = normalizedReportData['UREA (mg/dL)'] != null;
-    const hasAlbumin = normalizedReportData['ALBUMIN (g/dL)'] != null;
-    if (!hasCreatinine || !hasUrea || !hasAlbumin) {
-      return res.status(400).json({
-        error: 'Invalid input',
-        message: 'Missing required clinical values (creatinine, urea, albumin)'
-      });
-    }
-
-    if (mlPrediction.status !== 'success') {
-      return res.status(400).json({
-        error: 'ML prediction error',
-        message: 'ML prediction status is not success. Cannot proceed with analysis.',
-        details: { status: mlPrediction.status, error: mlPrediction.error || 'Unknown error' }
-      });
-    }
-
-    if (mlPrediction.prediction === null || mlPrediction.prediction === undefined) {
-      return res.status(400).json({
-        error: 'Invalid input',
-        message: 'Missing required field: mlPrediction.prediction'
-      });
-    }
-
-    if (!Array.isArray(mlPrediction.probabilities) || mlPrediction.probabilities.length !== 2) {
-      return res.status(400).json({
-        error: 'Invalid input',
-        message: 'mlPrediction.probabilities must be an array of length 2'
-      });
-    }
-
-    const result = await generateDifferentialAnalysis(
+    const result = await runThirdOpAnalysis({
       reportId,
-      normalizedReportData,
-      mlPrediction,
-      reportMetadata || {}
-    );
+      reportData,
+      mlPrediction: mlPrediction || null,
+      reportMetadata: reportMetadata || {}
+    });
+
+    // Persist result for re-analysis (so opening report later can show last analysis)
+    if (reportId && result && (result.riskTier != null || result.status === 'no_kidney_analysis')) {
+      try {
+        const toStore = { ...result, version: 1 };
+        await Report.findByIdAndUpdate(reportId, { $set: { thirdopAnalysis: toStore } });
+      } catch (e) {
+        console.warn('[ThirdOp] Could not update report thirdopAnalysis:', e.message);
+      }
+    }
 
     return res.status(200).json(result);
   } catch (error) {
     console.error('[ThirdOp] Route error:', error.message);
+    const isProd = process.env.NODE_ENV === 'production';
     res.status(500).json({
-      error: 'Internal server error',
-      message: 'Error processing ThirdOp analysis',
-      details: error.message
+      error: 'THIRDOP_ANALYSIS_FAILED',
+      message: 'Error processing ThirdOp analysis. Please try again.',
+      ...(isProd ? {} : { details: error.message })
+    });
+  }
+});
+
+/**
+ * POST /api/thirdop/analyze-generic
+ * Any Report Analysis: PDF upload → extract params → compare ranges → LLM concerns.
+ * Does NOT call ML or analyzeThirdOpCase. Separate engine from kidney flow.
+ */
+router.post('/analyze-generic', auth, genericUpload.single('file'), async (req, res) => {
+  let filePath = null;
+  try {
+    if (!req.file || !req.file.path) {
+      return res.status(400).json({ error: 'Invalid input', message: 'PDF file is required.' });
+    }
+    filePath = req.file.path;
+    const gender = req.body.gender || undefined;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'User not authenticated.' });
+    }
+
+    const result = await runGenericAnalysis(filePath, gender, userId);
+
+    if (result.status === 'invalid_report') {
+      return res.status(200).json({ status: 'invalid_report' });
+    }
+
+    if (result.status === 'normal') {
+      return res.status(200).json({
+        status: 'normal',
+        message: result.message || 'No clinically significant abnormalities detected.',
+        reportId: result.reportId
+      });
+    }
+
+    return res.status(200).json({
+      status: result.status,
+      concerns: result.concerns || [],
+      reportId: result.reportId,
+      ...(result.partialData && { partialData: true })
+    });
+  } catch (err) {
+    console.error('[ThirdOp] analyze-generic error:', err.message);
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({
+      error: 'GENERIC_ANALYSIS_FAILED',
+      message: 'Error processing generic lab analysis. Please try again.',
+      ...(isProd ? {} : { details: err.message })
+    });
+  } finally {
+    if (filePath && fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (e) { /* ignore */ }
+    }
+  }
+});
+
+/**
+ * POST /api/thirdop/medgemma
+ * Nephrology-focused clinical reasoning: structured lab JSON → concerns + patient Q&A.
+ * Body: { structuredLabInput: Object } (e.g. reportData or canonical lab values).
+ */
+router.post('/medgemma', auth, async (req, res) => {
+  try {
+    const { structuredLabInput } = req.body;
+
+    if (structuredLabInput == null || typeof structuredLabInput !== 'object') {
+      return res.status(400).json({
+        error: 'INVALID_INPUT',
+        message: 'Missing or invalid structuredLabInput (must be an object)'
+      });
+    }
+
+    const result = await generateMedGemmaReasoning(structuredLabInput);
+    return res.status(200).json(result);
+  } catch (err) {
+    console.error('[ThirdOp] medgemma error:', err.message);
+    const isProd = process.env.NODE_ENV === 'production';
+    res.status(500).json({
+      error: 'MEDGEMMA_REASONING_FAILED',
+      message: 'Clinical reasoning request failed. Please try again.',
+      ...(isProd ? {} : { details: err.message })
     });
   }
 });
