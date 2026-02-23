@@ -136,7 +136,7 @@ export default function AnyReportAnalysisModal({ open, onClose, token }) {
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle>Any Report Analysis</DialogTitle>
+      <DialogTitle>Report Analysis</DialogTitle>
       <DialogContent dividers>
         {!result && (
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, pt: 1 }}>

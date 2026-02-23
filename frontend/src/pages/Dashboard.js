@@ -488,7 +488,7 @@ const Dashboard = () => {
                     boxShadow: theme.shadows[1]
                   }}
                 >
-                  Any Report Analysis
+                   Report Analysis
                 </Button>
               </Box>
             </Paper>

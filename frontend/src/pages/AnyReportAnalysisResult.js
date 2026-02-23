@@ -74,7 +74,7 @@ export default function AnyReportAnalysisResult() {
   if (status === 'invalid_report') {
     return (
       <Container maxWidth="lg" sx={{ py: 4 }}>
-        <Typography variant="h5" sx={{ fontWeight: 600, mb: 2 }}>Any Report Analysis Result</Typography>
+        <Typography variant="h5" sx={{ fontWeight: 600, mb: 2 }}>Report Analysis Result</Typography>
         <Alert severity="warning">
           No recognizable medical laboratory parameters were detected. Please upload a valid medical lab report.
         </Alert>
@@ -99,7 +99,7 @@ export default function AnyReportAnalysisResult() {
     <Container maxWidth="lg" sx={{ py: 4 }}>
       <Box sx={{ bgcolor: '#fafafa', borderRadius: '12px', p: { xs: 2, sm: 3 }, minHeight: 400 }}>
         <Typography variant="h5" sx={{ fontWeight: 600, mb: 0.5 }}>
-          Any Report Analysis Result
+          Report Analysis Result
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
           Report ID: {reportId}
