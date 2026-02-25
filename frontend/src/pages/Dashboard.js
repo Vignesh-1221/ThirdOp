@@ -135,6 +135,7 @@ const Dashboard = () => {
         }
         
         // Process the response data from backend: { reports: [...] }
+        console.log('Dashboard reports response:', response.data);
         const { reports: allReports = [] } = response.data;
 
         // Store all reports; UI will derive latest subset
@@ -161,13 +162,100 @@ const Dashboard = () => {
   
   const latestThreeReports = reports.slice(0, 3);
 
-  // Prepare chart data
+  // Transform raw reports into time-series metrics for the chart
+  const sortedReports = [...reports].sort((a, b) => {
+    const aDate = new Date(a.reportDate || a.uploadDate || 0);
+    const bDate = new Date(b.reportDate || b.uploadDate || 0);
+    return aDate - bDate;
+  });
+
+  const metrics = sortedReports.map((report) => {
+    const dateSource = report.reportDate || report.uploadDate;
+    const date = dateSource ? new Date(dateSource).toLocaleDateString() : '';
+
+    let creatinine = null;
+    let protein = null;
+
+    // Prefer structured parameters array when available
+    if (Array.isArray(report.parameters)) {
+      const creatinineParam = report.parameters.find(
+        (p) => typeof p.name === 'string' && p.name.toLowerCase() === 'creatinine'
+      );
+      const proteinParam = report.parameters.find(
+        (p) => typeof p.name === 'string' && p.name.toLowerCase().includes('protein')
+      );
+
+      if (creatinineParam && creatinineParam.value != null) {
+        const v = Number(creatinineParam.value);
+        if (Number.isFinite(v)) creatinine = v;
+      }
+
+      if (proteinParam && proteinParam.value != null) {
+        const v = Number(proteinParam.value);
+        if (Number.isFinite(v)) protein = v;
+      }
+    }
+
+    // Fallback to reportData object (manual entry / legacy shape)
+    if (report.reportData) {
+      const source = report.reportData;
+
+      if (creatinine == null) {
+        const creatinineKeys = [
+          'creatinine',
+          'CREATININE',
+          'CREATININE (mg/dL)',
+          'creatinineLevel',
+          'creatineLevel'
+        ];
+        for (const key of creatinineKeys) {
+          const raw = source[key];
+          if (raw === undefined || raw === null || raw === '') continue;
+          const v = typeof raw === 'number' ? raw : Number(raw);
+          if (Number.isFinite(v)) {
+            creatinine = v;
+            break;
+          }
+        }
+      }
+
+      if (protein == null) {
+        const proteinKeys = [
+          'protein',
+          'PROTEIN',
+          'proteinLevel',
+          'ALBUMIN',
+          'ALBUMIN (g/dL)',
+          'albumin'
+        ];
+        for (const key of proteinKeys) {
+          const raw = source[key];
+          if (raw === undefined || raw === null || raw === '') continue;
+          const v = typeof raw === 'number' ? raw : Number(raw);
+          if (Number.isFinite(v)) {
+            protein = v;
+            break;
+          }
+        }
+      }
+    }
+
+    return {
+      date,
+      creatinine,
+      protein
+    };
+  });
+
+  const recentMetrics = metrics.slice(-6);
+
+  // Prepare chart data for Chart.js from transformed metrics
   const chartData = {
-    labels: reports.slice(-6).map(report => new Date(report.uploadDate).toLocaleDateString()),
+    labels: recentMetrics.map((m) => m.date),
     datasets: [
       {
         label: 'Protein Levels',
-        data: reports.slice(-6).map(report => report.reportData.proteinLevel || 0),
+        data: recentMetrics.map((m) => (m.protein != null ? m.protein : null)),
         borderColor: '#FF6B6B',
         backgroundColor: 'rgba(255, 107, 107, 0.2)',
         borderWidth: 2,
@@ -178,7 +266,7 @@ const Dashboard = () => {
       },
       {
         label: 'Creatinine Levels',
-        data: reports.slice(-6).map(report => report.reportData.creatinineLevel || 0),
+        data: recentMetrics.map((m) => (m.creatinine != null ? m.creatinine : null)),
         borderColor: '#4ECDC4',
         backgroundColor: 'rgba(78, 205, 196, 0.2)',
         borderWidth: 2,
@@ -186,8 +274,8 @@ const Dashboard = () => {
         pointBackgroundColor: '#4ECDC4',
         pointRadius: 4,
         pointHoverRadius: 6
-      },
-    ],
+      }
+    ]
   };
 
   const handleOpenReportsModal = () => {

@@ -264,6 +264,23 @@ const Navbar = () => {
               >
                 Find
               </Button>
+              <Button
+                onClick={() => navigate('/analytics')}
+                sx={{
+                  my: 2,
+                  mx: 2,
+                  color: 'white',
+                  fontSize: '1.2rem',
+                  display: 'block',
+                  transition: 'transform 0.2s ease, color 0.2s ease',
+                  '&:hover': {
+                    color: '#f5f5f5',
+                    transform: 'scale(1.1)',
+                  },
+                }}
+              >
+                Analytics
+              </Button>
             </Box>
           ) : (
             <Box sx={{ flexGrow: 1 }} />

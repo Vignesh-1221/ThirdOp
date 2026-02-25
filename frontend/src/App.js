@@ -19,6 +19,7 @@ import ReportDetail from './pages/ReportDetail';
 import Profile from './pages/Profile';
 import ThirdOp from './pages/ThirdOp';
 import AnyReportAnalysisResult from './pages/AnyReportAnalysisResult';
+import AnalyticsPage from './pages/AnalyticsPage';
 import NotFound from './pages/NotFound';
 
 // Create theme
@@ -88,6 +89,14 @@ function App() {
               element={
                 <PrivateRoute>
                   <ReportDetail />
+                </PrivateRoute>
+              } 
+            />
+            <Route 
+              path="/analytics" 
+              element={
+                <PrivateRoute>
+                  <AnalyticsPage />
                 </PrivateRoute>
               } 
             />

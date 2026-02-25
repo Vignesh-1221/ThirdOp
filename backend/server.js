@@ -26,6 +26,7 @@ const doctorRoutes = require('./routes/doctor.routes');
 const predictionRoutes = require('./routes/prediction.routes');
 const thirdopRoutes = require('./routes/thirdop.routes');
 const testRoutes = require('./routes/test.routes');
+const analyticsRoutes = require('./routes/analytics.routes');
 
 app.use('/api/auth', authRoutes);
 app.use('/api/reports', reportRoutes);
@@ -34,6 +35,7 @@ app.use('/api/predict', predictionRoutes);
 app.use('/api/ml', mlRoutes);
 app.use('/api/thirdop', thirdopRoutes);
 app.use('/api/test', testRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 // Health check routes (e.g. Ollama connectivity)
 const healthRoutes = require('./routes/health.routes');
