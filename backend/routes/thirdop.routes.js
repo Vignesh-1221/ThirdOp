@@ -27,11 +27,10 @@ const genericUpload = multer({
 });
 
 /**
- * POST /api/thirdop/analyze
- * Analyzes clinical data; runs kidney decision support only when kidney markers + ML present.
- * All reportData is normalized (canonical keys) and sanity-validated; no global mandatory creatinine/urea/albumin.
+ * Core handler for ThirdOp analysis.
+ * Used by both the authenticated production route and the test-only route (when NODE_ENV === 'test').
  */
-router.post('/analyze', auth, async (req, res) => {
+async function handleThirdOpAnalyze(req, res) {
   try {
     const { reportId, reportData, mlPrediction, reportMetadata } = req.body;
 
@@ -76,7 +75,22 @@ router.post('/analyze', auth, async (req, res) => {
       ...(isProd ? {} : { details: error.message })
     });
   }
-});
+}
+
+/**
+ * POST /api/thirdop/analyze
+ * Production route: protected by auth middleware.
+ */
+router.post('/analyze', auth, handleThirdOpAnalyze);
+
+/**
+ * POST /api/thirdop/analyze-test
+ * Test-only route: bypasses auth middleware.
+ * This route is only registered when NODE_ENV === 'test'.
+ */
+if (process.env.NODE_ENV === 'test') {
+  router.post('/analyze-test', handleThirdOpAnalyze);
+}
 
 /**
  * POST /api/thirdop/analyze-generic
