@@ -70,7 +70,7 @@ const Home = () => {
                   mb: 3,
                 }}
               >
-                IgA Nephropathy Prediction Platform
+                Predict. Prevent. Protect.
               </Typography>
               <Typography
                 variant={isMobile ? 'h6' : 'h5'}
@@ -81,7 +81,7 @@ const Home = () => {
                   lineHeight: 1.6,
                 }}
               >
-                Early detection and proper management of IgA Nephropathy can significantly improve outcomes.
+                A smart AI-driven platform for early risk assessment and clinical decision support in IgA Nephropathy.
               </Typography>
               <Stack direction={isMobile ? 'column' : 'row'} spacing={2} sx={{ mt: 4 }}>
                 <Button
